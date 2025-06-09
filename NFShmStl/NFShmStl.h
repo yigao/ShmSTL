@@ -10,7 +10,57 @@
 #pragma once
 
 #include "NFComm/NFCore/NFPlatform.h"
+#include "NFComm/NFPluginModule/NFStackTrace.h"
+#include "NFComm/NFPluginModule/NFLogMgr.h"
+#include "NFComm/NFObjCommon/NFShmMgr.h"
+#include "NFComm/NFPluginModule/NFCheck.h"
 #include <stdio.h>
+#include <type_traits>
+
+//#define TENCENT_USE_STL 1
+#define USE_SHM_STL
+#define SHM_CREATE_MODE EN_OBJ_MODE_INIT == NFShmMgr::Instance()->GetCreateMode()
+
+//不适用bool, 如果内存没有初始化，很可能是一个随机值，导致初始化状态依然是true
+enum NF_SHM_STL_INIT
+{
+    EN_NF_SHM_STL_INIT_NONE = 0,
+    EN_NF_SHM_STL_INIT_OK = 1,
+};
+
+#ifdef TENCENT_USE_STL
+#ifndef CHECK_EXPR
+#define CHECK_EXPR(expr, ret, format, ...)\
+    do {\
+        if (unlikely(!(expr)))\
+        {\
+            CHECK_ERR(0, -1, format, ##__VA_ARGS__);\
+            return ret;\
+        }\
+    }while(0)
+#endif//CHECK_EXPR
+
+#ifndef CHECK_EXPR_RE_VOID
+#define CHECK_EXPR_RE_VOID(expr, format, ...)\
+    do {\
+        if (unlikely(!(expr)))\
+        {\
+            CHECK_ERR_RE_VOID(0, -1, format, ##__VA_ARGS__);\
+        }\
+    }while(0)
+#endif//CHECK_EXPR_RE_VOID
+
+#ifndef NF_ASSERT
+#define NF_ASSERT(expr)\
+    do {\
+        if (unlikely(!(expr)))\
+        {\
+            CHECK_ERR_RE_VOID(0, -1, "assert error");\
+        }\
+    }while(0)
+#endif//NF_ASSERT
+
+#endif
 
 #if NF_PLATFORM == NF_PLATFORM_WIN
 namespace std
@@ -457,10 +507,56 @@ namespace std
         typedef __true_type __type;
     };
 
+    template<typename ForwardIterator, typename Size>
+    void __uninitialized_default_n(ForwardIterator first, Size n)
+    {
+        typedef typename iterator_traits<ForwardIterator>::value_type ValueType;
+        if (!std::stl_is_trivially_default_constructible<ValueType>::value)
+        {
+            for (size_t i = 0; i < n; i++)
+            {
+                new(first + i) ValueType(); // 标准placement构造
+            }
+        }
+        else
+        {
+            std::memset(first, 0, n * sizeof(ValueType));
+        }
+    }
+
 } // namespace std
 
 #else
-#define stl__Identity _Identity
 
+#define stl__Identity _Identity
+#if __cplusplus >= 201402L
+#else
 
 #endif
+
+#endif
+
+namespace std
+{
+    // 前置声明
+    template <typename T>
+    struct stl_is_trivially_default_constructible;
+
+    // 主模板
+    template <typename T>
+    struct stl_is_trivially_default_constructible
+    {
+    private:
+        template <typename U>
+        static typename std::integral_constant<bool,
+                                              std::is_trivial<U>::value &&
+                                              std::is_default_constructible<U>::value
+        >::type test(int);
+
+        template <typename>
+        static std::false_type test(...);
+
+    public:
+        static const bool value = decltype(test<T>(0))::value;
+    };
+}

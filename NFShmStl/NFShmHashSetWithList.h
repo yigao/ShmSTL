@@ -1,27 +1,28 @@
 // -------------------------------------------------------------------------
-//    @FileName         :    NFShmHashSet.h
+//    @FileName         :    NFShmHashSetWithList.h
 //    @Author           :    gaoyi
 //    @Date             :    23-2-11
 //    @Email			:    445267987@qq.com
-//    @Module           :    NFShmHashSet
+//    @Module           :    NFShmHashSetWithList
 //
 // -------------------------------------------------------------------------
 
 #pragma once
 
-#include "NFShmHashTable.h"
+#include "NFShmHashTableWithList.h"
 #include <set>
 #include <unordered_set>
 
 /**
- * @file NFShmHashSet.h
- * @brief 基于共享内存的无序集合容器实现，与STL std::unordered_set高度兼容
+ * @file NFShmHashSetWithList.h
+ * @brief 基于共享内存的无序集合容器实现（链表增强版），与STL std::unordered_set高度兼容
  * 
  * @section overview 概述
  * 
- * NFShmHashSet 是一个专为共享内存环境设计的无序集合容器，保证元素的唯一性。
- * 在API设计上与STL std::unordered_set高度兼容，但在内存管理、容量控制和性能特征方面
- * 针对共享内存场景进行了深度优化。它提供O(1)平均时间复杂度的操作，同时支持进程间数据共享。
+ * NFShmHashSetWithList 是一个专为共享内存环境设计的无序集合容器，在NFShmHashSet基础上
+ * 增加了双向链表支持，提供LRU（最近最少使用）缓存语义和顺序遍历功能。它保证元素的唯一性，
+ * 同时支持基于访问模式的自动淘汰机制。在API设计上与STL std::unordered_set高度兼容，
+ * 但在内存管理、容量控制和访问模式方面针对共享内存场景进行了深度优化。
  * 
  * @section features 核心特性
  * 
@@ -31,28 +32,34 @@
  *    - 支持高效的成员检查（contains语义）
  *    - 基于哈希的快速查找和插入
  * 
- * 2. **STL高度兼容**：
+ * 2. **双向链表增强**：
+ *    - 内建双向链表，维护元素访问/插入顺序
+ *    - list_begin()、list_end()提供顺序遍历
+ *    - LRU缓存语义，自动淘汰最久未使用元素
+ *    - enable_lru()/disable_lru()动态控制LRU行为
+ * 
+ * 3. **STL高度兼容**：
  *    - 完整的std::unordered_set API支持
  *    - 标准的迭代器接口和类型定义
  *    - find()、count()、insert()等常用操作
  *    - 支持范围for循环和STL算法
  * 
- * 3. **共享内存优化**：
+ * 4. **共享内存优化**：
  *    - 固定大小内存布局，避免动态分配
  *    - 元素直接存储，无额外包装
  *    - 支持CREATE/RESUME两阶段初始化
  *    - 无内存碎片，高效的内存使用
  * 
- * 4. **性能特征**：
+ * 5. **缓存友好设计**：
  *    - O(1)平均时间复杂度的哈希操作
- *    - 无rehash开销，稳定的性能表现
- *    - 链地址法解决冲突，固定桶数量
+ *    - 链表维护访问顺序，适合LRU淘汰策略
  *    - 预分配节点池，快速内存分配
+ *    - 固定桶数量，无rehash开销
  * 
  * @section stl_comparison 与STL std::unordered_set对比
  * 
- * | 特性 | std::unordered_set | NFShmHashSet |
- * |------|-------------------|--------------|
+ * | 特性 | std::unordered_set | NFShmHashSetWithList |
+ * |------|-------------------|---------------------|
  * | **内存管理** | 动态堆内存分配 | 固定共享内存预分配 |
  * | **容量限制** | 无限制，动态扩容 | 固定容量MAX_SIZE |
  * | **扩容机制** | 自动rehash扩容 | **不支持扩容** |
@@ -62,6 +69,10 @@
  * | **查找性能** | O(1)平均，O(n)最坏 | O(1)平均，O(n)最坏 |
  * | **成员检查** | find() != end() | find() != end() |
  * | **count操作** | 返回0或1 | 返回0或1 |
+ * | **访问顺序** | 无保证，依赖哈希顺序 | **双向链表维护顺序** |
+ * | **LRU支持** | 不支持 | **原生LRU缓存语义** |
+ * | **顺序遍历** | 仅哈希桶顺序 | **链表顺序遍历** |
+ * | **缓存淘汰** | 不支持 | **自动LRU淘汰机制** |
  * | **进程共享** | 不支持 | **原生支持** |
  * | **初始化方式** | 构造函数 | CreateInit/ResumeInit |
  * | **负载因子** | 动态调整 | 固定结构 |
@@ -83,6 +94,8 @@
  * **扩展的接口（新增）**：
  * - **容量检查**：full(), left_size()
  * - **共享内存**：CreateInit(), ResumeInit()
+ * - **链表遍历**：list_begin(), list_end(), list_cbegin(), list_cend()
+ * - **LRU控制**：enable_lru(), disable_lru(), is_lru_enabled()
  * - **STL转换**：从std::unordered_set和std::set构造
  * 
  * **不支持的接口**：
@@ -95,143 +108,267 @@
  * @subsection basic_usage 基础用法（类似std::unordered_set）
  * 
  * ```cpp
- * // 定义容量为1000的整数集合
- * NFShmHashSet<int, 1000> numberSet;
- * numberSet.CreateInit();  // 创建模式初始化
+ * // 定义容量为1000的整数集合（带链表）
+ * NFShmHashSetWithList<int, 1000> numberCacheSet;
+ * numberCacheSet.CreateInit();  // 创建模式初始化
  * 
  * // 插入元素（保证唯一性）
- * auto result1 = numberSet.insert(42);
+ * auto result1 = numberCacheSet.insert(42);
  * std::cout << "Insert 42: " << (result1.second ? "success" : "already exists") << std::endl;
  * 
- * auto result2 = numberSet.insert(42);  // 重复插入
+ * auto result2 = numberCacheSet.insert(42);  // 重复插入
  * std::cout << "Insert 42 again: " << (result2.second ? "success" : "already exists") << std::endl;
  * 
  * // 批量插入
  * std::vector<int> numbers = {1, 2, 3, 2, 4, 3, 5};  // 包含重复元素
- * numberSet.insert(numbers.begin(), numbers.end());
+ * numberCacheSet.insert(numbers.begin(), numbers.end());
  * 
- * std::cout << "Set size: " << numberSet.size() << std::endl;  // 输出：6 (去重后)
+ * std::cout << "Set size: " << numberCacheSet.size() << std::endl;  // 输出：6 (去重后)
  * 
  * // 成员检查
- * if (numberSet.find(42) != numberSet.end()) {
+ * if (numberCacheSet.find(42) != numberCacheSet.end()) {
  *     std::cout << "42 is in the set" << std::endl;
  * }
  * 
  * // count操作（对于集合，只返回0或1）
- * std::cout << "Count of 42: " << numberSet.count(42) << std::endl;  // 输出：1
- * std::cout << "Count of 99: " << numberSet.count(99) << std::endl;  // 输出：0
+ * std::cout << "Count of 42: " << numberCacheSet.count(42) << std::endl;  // 输出：1
+ * std::cout << "Count of 99: " << numberCacheSet.count(99) << std::endl;  // 输出：0
  * 
- * // 遍历集合
- * std::cout << "Elements: ";
- * for (const auto& num : numberSet) {
+ * // 哈希遍历（无序）
+ * std::cout << "Hash order traversal:" << std::endl;
+ * for (const auto& num : numberCacheSet) {
  *     std::cout << num << " ";
+ * }
+ * std::cout << std::endl;
+ * 
+ * // 链表遍历（按访问/插入顺序）
+ * std::cout << "List order traversal:" << std::endl;
+ * for (auto it = numberCacheSet.list_begin(); it != numberCacheSet.list_end(); ++it) {
+ *     std::cout << *it << " ";
  * }
  * std::cout << std::endl;
  * ```
  * 
- * @subsection set_operations 集合操作
+ * @subsection lru_set_cache LRU集合缓存
  * 
  * ```cpp
- * NFShmHashSet<std::string, 500> wordsSet;
+ * // 构建热门文章ID的LRU缓存集合
+ * NFShmHashSetWithList<int, 100> hotArticlesCache;
+ * hotArticlesCache.CreateInit();
+ * hotArticlesCache.enable_lru();  // 启用LRU
  * 
- * // 构建单词集合
- * std::vector<std::string> words = {
- *     "apple", "banana", "apple", "cherry", "banana", "date"
- * };
+ * // 批量添加热门文章ID
+ * for (int articleId = 1001; articleId <= 1100; ++articleId) {
+ *     hotArticlesCache.insert(articleId);
+ * }
  * 
- * for (const auto& word : words) {
- *     auto result = wordsSet.insert(word);
- *     if (!result.second) {
- *         std::cout << "Duplicate word ignored: " << word << std::endl;
+ * std::cout << "Hot articles cache size: " << hotArticlesCache.size() << std::endl;  // 100
+ * std::cout << "Cache is full: " << hotArticlesCache.full() << std::endl;  // true
+ * 
+ * // 模拟用户访问一些文章（会更新它们在LRU链表中的位置）
+ * std::vector<int> accessedArticles = {1001, 1010, 1025, 1050, 1075};
+ * for (int articleId : accessedArticles) {
+ *     auto it = hotArticlesCache.find(articleId);
+ *     if (it != hotArticlesCache.end()) {
+ *         std::cout << "Accessed article " << articleId << std::endl;
+ *         // find操作会自动更新LRU位置
  *     }
  * }
  * 
- * std::cout << "Unique words: " << wordsSet.size() << std::endl;  // 输出：4
- * 
- * // 集合成员检查函数
- * auto contains = [&](const std::string& word) -> bool {
- *     return wordsSet.find(word) != wordsSet.end();
- * };
- * 
- * // 检查单词是否存在
- * std::vector<std::string> checkWords = {"apple", "grape", "cherry", "orange"};
- * for (const auto& word : checkWords) {
- *     std::cout << word << ": " << (contains(word) ? "exists" : "not found") << std::endl;
+ * // 插入新的热门文章（会自动淘汰最久未访问的文章）
+ * std::vector<int> newHotArticles = {2001, 2002, 2003, 2004, 2005};
+ * for (int articleId : newHotArticles) {
+ *     auto result = hotArticlesCache.insert(articleId);
+ *     if (result.second) {
+ *         std::cout << "Added new hot article " << articleId << std::endl;
+ *     }
  * }
  * 
- * // 删除元素
- * size_t removed = wordsSet.erase("apple");
- * std::cout << "Removed " << removed << " element(s)" << std::endl;  // 输出：1
+ * std::cout << "Cache size after LRU: " << hotArticlesCache.size() << std::endl;  // 仍然100
  * 
- * // 条件删除（使用迭代器）
- * for (auto it = wordsSet.begin(); it != wordsSet.end();) {
- *     if (it->length() > 5) {  // 删除长度超过5的单词
- *         it = wordsSet.erase(it);
- *     } else {
- *         ++it;
- *     }
+ * // 检查最近访问的文章仍然存在
+ * for (int articleId : accessedArticles) {
+ *     bool exists = hotArticlesCache.count(articleId) > 0;
+ *     std::cout << "Article " << articleId << " still exists: " << exists << std::endl;
+ * }
+ * 
+ * // 查看当前最热门的前10篇文章（按LRU顺序）
+ * std::cout << "Top 10 hottest articles (by recent access):" << std::endl;
+ * int count = 0;
+ * for (auto it = hotArticlesCache.list_begin(); 
+ *          it != hotArticlesCache.list_end() && count < 10; 
+ *          ++it, ++count) {
+ *     std::cout << "Article " << *it << std::endl;
  * }
  * ```
  * 
- * @subsection capacity_management 容量管理
+ * @subsection access_pattern_tracking 访问模式跟踪
  * 
  * ```cpp
- * NFShmHashSet<int, 100> limitedSet;
+ * // 构建用户访问页面的追踪集合
+ * NFShmHashSetWithList<std::string, 200> visitedPagesSet;
+ * visitedPagesSet.disable_lru();  // 仅跟踪访问顺序，不淘汰
  * 
- * // 容量检查（STL没有的功能）
- * std::cout << "Max size: " << limitedSet.max_size() << std::endl;      // 100
- * std::cout << "Current size: " << limitedSet.size() << std::endl;       // 0
- * std::cout << "Is full: " << limitedSet.full() << std::endl;           // false
- * std::cout << "Left space: " << limitedSet.left_size() << std::endl;   // 100
+ * // 模拟用户访问不同页面
+ * std::vector<std::string> pageVisits = {
+ *     "/home", "/login", "/profile", "/settings", 
+ *     "/home", "/products", "/about", "/contact",
+ *     "/profile", "/home", "/logout"
+ * };
  * 
- * // 批量插入直到容量满
- * for (int i = 0; i < 150; ++i) {
- *     auto result = limitedSet.insert(i);
- *     if (!result.second) {
- *         std::cout << "Insert failed at " << i << ", set is full" << std::endl;
- *         break;  // 容量达到100时插入失败
+ * std::cout << "Tracking page visits:" << std::endl;
+ * for (const std::string& page : pageVisits) {
+ *     auto result = visitedPagesSet.insert(page);
+ *     if (result.second) {
+ *         std::cout << "First visit to: " << page << std::endl;
+ *     } else {
+ *         std::cout << "Revisited: " << page << " (moved to front of access list)" << std::endl;
  *     }
  * }
  * 
- * // 检查最终状态
- * std::cout << "Final size: " << limitedSet.size() << std::endl;         // 100
- * std::cout << "Is full: " << limitedSet.full() << std::endl;           // true
- * std::cout << "Left space: " << limitedSet.left_size() << std::endl;   // 0
+ * std::cout << "Total unique pages visited: " << visitedPagesSet.size() << std::endl;
  * 
- * // 验证唯一性
- * std::cout << "All elements are unique: " << std::boolalpha 
- *           << (limitedSet.size() == 100) << std::endl;  // true
+ * // 按访问顺序查看页面（最后访问的在链表头部）
+ * std::cout << "Pages in access order (most recent first):" << std::endl;
+ * for (auto it = visitedPagesSet.list_begin(); it != visitedPagesSet.list_end(); ++it) {
+ *     std::cout << *it << std::endl;
+ * }
+ * 
+ * // 检查特定页面是否被访问过
+ * std::vector<std::string> checkPages = {"/home", "/admin", "/help"};
+ * for (const std::string& page : checkPages) {
+ *     bool visited = visitedPagesSet.count(page) > 0;
+ *     std::cout << "Page " << page << " visited: " << visited << std::endl;
+ * }
+ * 
+ * // 获取最近访问的5个页面
+ * std::cout << "5 most recently accessed pages:" << std::endl;
+ * int pageCount = 0;
+ * for (auto it = visitedPagesSet.list_begin(); 
+ *          it != visitedPagesSet.list_end() && pageCount < 5; 
+ *          ++it, ++pageCount) {
+ *     std::cout << (pageCount + 1) << ". " << *it << std::endl;
+ * }
+ * ```
+ * 
+ * @subsection capacity_management 容量管理和去重
+ * 
+ * ```cpp
+ * NFShmHashSetWithList<int, 50> limitedSet;
+ * 
+ * // 容量检查（STL没有的功能）
+ * std::cout << "Max size: " << limitedSet.max_size() << std::endl;      // 50
+ * std::cout << "Current size: " << limitedSet.size() << std::endl;       // 0
+ * std::cout << "Is full: " << limitedSet.full() << std::endl;           // false
+ * std::cout << "Left space: " << limitedSet.left_size() << std::endl;   // 50
+ * 
+ * // 启用LRU以处理容量满的情况
+ * limitedSet.enable_lru();
+ * 
+ * // 模拟数据流，包含重复元素
+ * std::vector<int> dataStream = {
+ *     1, 2, 3, 4, 5, 1, 6, 7, 8, 9, 10,
+ *     11, 12, 13, 14, 15, 2, 16, 17, 18, 19, 20,
+ *     21, 22, 23, 24, 25, 3, 26, 27, 28, 29, 30,
+ *     31, 32, 33, 34, 35, 4, 36, 37, 38, 39, 40,
+ *     41, 42, 43, 44, 45, 5, 46, 47, 48, 49, 50,
+ *     51, 52, 53, 54, 55, 1, 56, 57, 58, 59, 60
+ * };
+ * 
+ * std::cout << "Processing data stream..." << std::endl;
+ * int insertCount = 0, duplicateCount = 0, evictedCount = 0;
+ * 
+ * for (int value : dataStream) {
+ *     auto result = limitedSet.insert(value);
+ *     if (result.second) {
+ *         insertCount++;
+ *         if (limitedSet.size() > 50) {
+ *             evictedCount++;
+ *         }
+ *     } else {
+ *         duplicateCount++;
+ *         std::cout << "Duplicate value " << value << " accessed, moved to front" << std::endl;
+ *     }
+ * }
+ * 
+ * std::cout << "Processing complete:" << std::endl;
+ * std::cout << "Total insertions: " << insertCount << std::endl;
+ * std::cout << "Duplicate accesses: " << duplicateCount << std::endl;
+ * std::cout << "Final set size: " << limitedSet.size() << std::endl;
+ * std::cout << "Set is full: " << limitedSet.full() << std::endl;
+ * 
+ * // 检查最近访问的元素是否还在集合中
+ * std::vector<int> recentValues = {1, 2, 3, 4, 5};
+ * std::cout << "Checking if recently accessed values are still in set:" << std::endl;
+ * for (int value : recentValues) {
+ *     bool exists = limitedSet.count(value) > 0;
+ *     std::cout << "Value " << value << ": " << (exists ? "exists" : "evicted") << std::endl;
+ * }
+ * 
+ * // 显示当前集合内容（按LRU顺序）
+ * std::cout << "Current set contents (LRU order):" << std::endl;
+ * int displayCount = 0;
+ * for (auto it = limitedSet.list_begin(); 
+ *          it != limitedSet.list_end() && displayCount < 20; 
+ *          ++it, ++displayCount) {
+ *     std::cout << *it << " ";
+ *     if ((displayCount + 1) % 10 == 0) std::cout << std::endl;
+ * }
+ * std::cout << std::endl;
  * ```
  * 
  * @subsection shared_memory_usage 共享内存使用
  * 
  * ```cpp
  * // 进程A：创建共享的集合
- * NFShmHashSet<int, 1000> sharedSet;
+ * NFShmHashSetWithList<int, 1000> sharedSet;
  * if (sharedSet.CreateInit() == 0) {  // 创建成功
+ *     sharedSet.enable_lru();  // 启用LRU
+ *     
  *     // 添加一些数据
- *     std::vector<int> data = {1, 2, 3, 4, 5};
- *     sharedSet.insert(data.begin(), data.end());
+ *     std::vector<int> initialData = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+ *     sharedSet.insert(initialData.begin(), initialData.end());
+ *     
  *     std::cout << "Created shared set with " << sharedSet.size() << " elements" << std::endl;
  * }
  * 
  * // 进程B：恢复已存在的共享内存集合
- * NFShmHashSet<int, 1000> restoredSet;
+ * NFShmHashSetWithList<int, 1000> restoredSet;
  * if (restoredSet.ResumeInit() == 0) {  // 恢复成功
  *     std::cout << "Restored set with " << restoredSet.size() << " elements" << std::endl;
+ *     std::cout << "LRU enabled: " << restoredSet.is_lru_enabled() << std::endl;
  *     
  *     // 检查进程A创建的数据
- *     for (int i = 1; i <= 5; ++i) {
+ *     for (int i = 1; i <= 10; ++i) {
  *         if (restoredSet.count(i) > 0) {
  *             std::cout << "Element " << i << " exists from Process A" << std::endl;
  *         }
  *     }
+ * 
+ *     // 访问一些元素（影响LRU顺序）
+ *     std::vector<int> accessElements = {2, 5, 8};
+ *     for (int elem : accessElements) {
+ *         auto it = restoredSet.find(elem);
+ *         if (it != restoredSet.end()) {
+ *             std::cout << "Accessed element " << elem << std::endl;
+ *         }
+ *     }
  *     
  *     // 添加进程B的数据
- *     std::vector<int> newData = {6, 7, 8, 9, 10};
+ *     std::vector<int> newData = {11, 12, 13, 14, 15};
  *     restoredSet.insert(newData.begin(), newData.end());
  *     
  *     std::cout << "After Process B additions: " << restoredSet.size() << " elements" << std::endl;
+ *     
+ *     // 查看当前LRU顺序
+ *     std::cout << "Current LRU order (first 10):" << std::endl;
+ *     int elemCount = 0;
+ *     for (auto it = restoredSet.list_begin(); 
+ *              it != restoredSet.list_end() && elemCount < 10; 
+ *              ++it, ++elemCount) {
+ *         std::cout << *it << " ";
+ *     }
+ *     std::cout << std::endl;
  * }
  * ```
  * 
@@ -243,48 +380,86 @@
  *     "apple", "banana", "cherry", "apple"  // 注意：apple重复，STL会自动去重
  * };
  * 
- * NFShmHashSet<std::string, 1000> shmSet(stdSet);  // 从STL构造
+ * NFShmHashSetWithList<std::string, 1000> shmSet(stdSet);  // 从STL构造
+ * shmSet.enable_lru();
+ * 
  * std::cout << "Converted from STL: " << shmSet.size() << " elements" << std::endl;
  * 
- * // 转换回STL容器
- * std::unordered_set<std::string> convertedSet;
- * for (const auto& element : shmSet) {
- *     convertedSet.insert(element);
+ * // 转换回STL容器（保持链表顺序）
+ * std::vector<std::string> orderedElements;
+ * for (auto it = shmSet.list_begin(); it != shmSet.list_end(); ++it) {
+ *     orderedElements.push_back(*it);
  * }
  * 
  * // 使用STL算法
- * auto count = std::count_if(shmSet.begin(), shmSet.end(),
+ * auto longWordCount = std::count_if(shmSet.begin(), shmSet.end(),
  *     [](const std::string& word) { return word.length() > 5; });
- * std::cout << "Words longer than 5 chars: " << count << std::endl;
+ * std::cout << "Words longer than 5 chars: " << longWordCount << std::endl;
  * 
- * // 集合运算（模拟）
- * NFShmHashSet<int, 100> setA, setB;
- * setA.insert({1, 2, 3, 4, 5});
- * setB.insert({4, 5, 6, 7, 8});
- * 
- * // 交集（手动实现）
- * std::vector<int> intersection;
- * for (const auto& element : setA) {
- *     if (setB.count(element) > 0) {
- *         intersection.push_back(element);
+ * // 模拟访问（影响LRU顺序）
+ * std::vector<std::string> accessWords = {"apple", "cherry"};
+ * for (const std::string& word : accessWords) {
+ *     auto it = shmSet.find(word);
+ *     if (it != shmSet.end()) {
+ *         std::cout << "Accessed word: " << word << std::endl;
  *     }
  * }
  * 
- * std::cout << "Intersection size: " << intersection.size() << std::endl;  // 输出：2 (4,5)
+ * // 添加新元素
+ * std::vector<std::string> newWords = {"date", "elderberry", "fig"};
+ * for (const std::string& word : newWords) {
+ *     auto result = shmSet.insert(word);
+ *     if (result.second) {
+ *         std::cout << "Added new word: " << word << std::endl;
+ *     }
+ * }
+ * 
+ * // 基于访问频率的集合运算（模拟）
+ * std::unordered_set<std::string> favoriteWords = {"apple", "banana", "date"};
+ * 
+ * // 找出收藏夹中存在的单词
+ * std::vector<std::string> foundFavorites;
+ * for (const std::string& word : favoriteWords) {
+ *     if (shmSet.count(word) > 0) {
+ *         foundFavorites.push_back(word);
+ *     }
+ * }
+ * 
+ * std::cout << "Favorite words found in set: ";
+ * for (const std::string& word : foundFavorites) {
+ *     std::cout << word << " ";
+ * }
+ * std::cout << std::endl;
+ * 
+ * // 获取最近访问的前N个元素
+ * std::vector<std::string> recentWords;
+ * int n = 3;
+ * auto it = shmSet.list_begin();
+ * for (int i = 0; i < n && it != shmSet.list_end(); ++i, ++it) {
+ *     recentWords.push_back(*it);
+ * }
+ * 
+ * std::cout << "Most recent " << n << " words: ";
+ * for (const std::string& word : recentWords) {
+ *     std::cout << word << " ";
+ * }
+ * std::cout << std::endl;
  * ```
  * 
  * @section performance_notes 性能说明
  * 
  * - **查找性能**：O(1)平均，O(n)最坏（链表长度）
- * - **插入性能**：O(1)平均，重复元素快速拒绝
- * - **删除性能**：O(1)平均，节点回收到内存池
+ * - **插入性能**：O(1)平均，重复元素快速拒绝，包含链表维护开销
+ * - **删除性能**：O(1)平均，需更新链表结构
  * - **唯一性检查**：插入时自动进行，无额外开销
- * - **内存性能**：零碎片，预分配，缓存友好
+ * - **LRU操作**：O(1)时间复杂度的链表头尾操作
+ * - **顺序遍历**：O(n)链表遍历，缓存友好
+ * - **内存性能**：零碎片，预分配，额外链表节点开销
  * - **并发性能**：需要外部同步，但支持多进程读写
  * 
  * @section migration_guide 迁移指南
  * 
- * 从std::unordered_set迁移到NFShmHashSet：
+ * 从std::unordered_set迁移到NFShmHashSetWithList：
  * 
  * 1. **替换类型声明**：
  *    ```cpp
@@ -292,7 +467,7 @@
  *    std::unordered_set<int> set;
  *    
  *    // 新代码（添加容量模板参数）
- *    NFShmHashSet<int, 10000> set;
+ *    NFShmHashSetWithList<int, 10000> set;
  *    ```
  * 
  * 2. **添加初始化**：
@@ -311,57 +486,91 @@
  *    auto it = set.find(element);           // 查找元素
  *    ```
  * 
- * 4. **处理容量限制**：
+ * 4. **利用链表特性**：
  *    ```cpp
- *    // 检查容量状态
- *    if (!set.full()) {
- *        set.insert(element);
- *    } else {
- *        // 处理容量满的情况
+ *    // 启用LRU缓存语义
+ *    set.enable_lru();
+ *    
+ *    // 使用链表顺序遍历
+ *    for (auto it = set.list_begin(); it != set.list_end(); ++it) {
+ *         // 按访问顺序处理元素
  *    }
  *    ```
  * 
- * 5. **移除不支持的操作**：
+ * 5. **处理容量限制**：
  *    ```cpp
- *    // 移除这些调用（NFShmHashSet不支持）
+ *    // 利用LRU自动淘汰机制
+ *    if (set.full() && set.is_lru_enabled()) {
+ *         // 插入会自动淘汰最久未使用的元素
+ *         set.insert(element);
+ *    }
+ *    ```
+ * 
+ * 6. **移除不支持的操作**：
+ *    ```cpp
+ *    // 移除这些调用（NFShmHashSetWithList不支持）
  *    // set.rehash(1000);     // 动态管理不支持
  *    // set.reserve(500);     // 动态管理不支持
  *    // set.max_load_factor(0.8);  // 负载因子管理不支持
  *    ```
+ * 
+ * 7. **充分利用新特性**：
+ *    ```cpp
+ *    // 检查LRU状态
+ *    if (set.is_lru_enabled()) {
+ *         // 基于访问模式的逻辑
+ *    }
+ *    
+ *    // 动态控制LRU行为
+ *    set.disable_lru();  // 禁用LRU，仅维护访问顺序
+ *    set.enable_lru();   // 重新启用LRU淘汰
+ *    
+ *    // 获取最近访问的元素
+ *    auto recent_it = set.list_begin();  // 最近访问的元素
+ *    ```
  */
 
 /****************************************************************************
- * STL std::unordered_set 对比分析
+ * STL std::unordered_set 对比分析（WithList增强版）
  ****************************************************************************
  * 
  * 1. 内存管理策略对比：
  *    - std::unordered_set: 动态内存分配，使用allocator管理堆内存
- *    - NFShmHashSet: 固定大小共享内存，预分配所有节点，支持进程间共享
+ *    - NFShmHashSetWithList: 固定大小共享内存，预分配所有节点，支持进程间共享
  * 
  * 2. 容量管理对比：
  *    - std::unordered_set: 动态扩容，load_factor超过阈值时自动rehash
- *    - NFShmHashSet: 固定容量MAX_SIZE，不支持动态扩容
+ *    - NFShmHashSetWithList: 固定容量MAX_SIZE，通过LRU机制处理容量满的情况
  * 
- * 3. 元素存储对比：
+ * 3. 访问顺序管理对比：
+ *    - std::unordered_set: 无访问顺序概念，遍历顺序依赖哈希桶
+ *    - NFShmHashSetWithList: 内置双向链表维护访问/插入顺序，支持LRU语义
+ * 
+ * 4. 元素存储对比：
  *    - std::unordered_set: 直接存储元素值
- *    - NFShmHashSet: 同样直接存储元素值，使用std::_Identity函数提取键
+ *    - NFShmHashSetWithList: 同样直接存储元素值，使用std::_Identity函数提取键
  * 
- * 4. 唯一性保证对比：
+ * 5. 唯一性保证对比：
  *    - 都保证元素唯一性，不允许重复元素
  *    - 插入重复元素时都返回现有元素的迭代器
  * 
- * 5. 性能特征对比：
- *    - std::unordered_set: O(1)平均时间复杂度，但可能触发rehash开销
- *    - NFShmHashSet: O(1)平均时间复杂度，无rehash开销，但可能因固定容量产生更多冲突
+ * 6. 缓存语义对比：
+ *    - std::unordered_set: 无缓存概念，需要手动实现LRU逻辑
+ *    - NFShmHashSetWithList: 原生LRU支持，自动淘汰最久未使用元素
  * 
- * 6. API兼容性：
+ * 7. 性能特征对比：
+ *    - std::unordered_set: O(1)平均时间复杂度，但可能触发rehash开销
+ *    - NFShmHashSetWithList: O(1)平均时间复杂度，额外O(1)链表维护开销，无rehash开销
+ * 
+ * 8. API兼容性：
  *    - 兼容接口：insert, find, erase, begin, end, size, empty, count等
+ *    - 扩展接口：list_begin, list_end, enable_lru, disable_lru, is_lru_enabled等
  *    - 特有接口：full(), left_size(), CreateInit(), ResumeInit()等共享内存特有功能
  *    - 缺少接口：rehash, reserve, bucket, load_factor等动态管理接口
  * 
- * 7. 构造和初始化对比：
- *    - std::unordered_set: 标准构造函数，支持多种初始化方式
- *    - NFShmHashSet: 支持从STL容器构造，增加共享内存特有的CreateInit/ResumeInit
+ * 9. 使用场景对比：
+ *    - std::unordered_set: 通用集合容器，去重和成员检查
+ *    - NFShmHashSetWithList: 缓存系统、访问跟踪、热点数据管理、LRU淘汰策略、共享内存应用
  *****************************************************************************/
 
 // ==================== 前向声明 ====================
@@ -369,11 +578,11 @@
 template <class Value, int MAX_SIZE,
           class HashFcn = std::hash<Value>,
           class EqualKey = std::equal_to<Value>>
-class NFShmHashSet;
+class NFShmHashSetWithList;
 
 template <class Value, int MAX_SIZE, class HashFcn, class EqualKey>
-bool operator==(const NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>& hs1,
-                const NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>& hs2);
+bool operator==(const NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>& hs1,
+                const NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>& hs2);
 
 // ==================== 主要容器类 ====================
 
@@ -383,13 +592,13 @@ bool operator==(const NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>& hs1,
  * @tparam MAX_SIZE 最大容量（固定）
  * @tparam HashFcn 哈希函数类型，默认std::hash<Value>
  * @tparam EqualKey 元素比较函数类型，默认std::equal_to<Value>
- * 
+ *
  * 设计特点：
  * 1. 固定容量，不支持动态扩容（与STL主要区别）
  * 2. 基于共享内存，支持进程间共享
  * 3. API设计尽量兼容STL std::unordered_set
  * 4. 保证元素唯一性，不允许重复元素
- * 
+ *
  * 与std::unordered_set的主要差异：
  * - 容量限制：固定大小 vs 动态扩容
  * - 内存管理：共享内存 vs 堆内存
@@ -397,11 +606,11 @@ bool operator==(const NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>& hs1,
  * - 进程支持：进程间共享 vs 单进程内使用
  */
 template <class Value, int MAX_SIZE, class HashFcn, class EqualKey>
-class NFShmHashSet
+class NFShmHashSetWithList
 {
 private:
     /// @brief 底层哈希表类型，使用std::_Identity函数提取键（键即值本身）
-    typedef NFShmHashTable<Value, Value, MAX_SIZE, HashFcn, std::stl__Identity<Value>, EqualKey> HashTable;
+    typedef NFShmHashTableWithList<Value, Value, MAX_SIZE, HashFcn, std::stl__Identity<Value>, EqualKey> HashTable;
     HashTable m_hashTable; ///< 底层哈希表实例
 
 public:
@@ -422,6 +631,8 @@ public:
     typedef typename HashTable::iterator iterator; ///< 迭代器类型
     typedef typename HashTable::const_iterator const_iterator; ///< 常量迭代器类型
 
+    typedef typename HashTable::list_iterator list_iterator; ///< 迭代器类型
+    typedef typename HashTable::const_list_iterator const_list_iterator; ///< 常量迭代器类型
 public:
     // ==================== 构造函数和析构函数 ====================
 
@@ -430,7 +641,7 @@ public:
      * @note 根据SHM_CREATE_MODE决定创建或恢复模式
      * @note 与std::unordered_set()行为类似，但增加共享内存初始化
      */
-    NFShmHashSet()
+    NFShmHashSetWithList()
     {
         if (SHM_CREATE_MODE)
         {
@@ -450,7 +661,7 @@ public:
      * @note 与std::unordered_set(first, last)兼容
      */
     template <class InputIterator>
-    NFShmHashSet(InputIterator f, InputIterator l)
+    NFShmHashSetWithList(InputIterator f, InputIterator l)
     {
         m_hashTable.insert_unique(f, l);
     }
@@ -461,7 +672,7 @@ public:
      * @param l 结束指针
      * @note 与std::unordered_set兼容
      */
-    NFShmHashSet(const value_type* f, const value_type* l)
+    NFShmHashSetWithList(const value_type* f, const value_type* l)
     {
         m_hashTable.insert_unique(f, l);
     }
@@ -471,17 +682,17 @@ public:
      * @param f 起始常量迭代器
      * @param l 结束常量迭代器
      */
-    NFShmHashSet(const_iterator f, const_iterator l)
+    NFShmHashSetWithList(const_iterator f, const_iterator l)
     {
         m_hashTable.insert_unique(f, l);
     }
 
     /**
      * @brief 拷贝构造函数
-     * @param x 源NFShmHashSet对象
+     * @param x 源NFShmHashSetWithList对象
      * @note 与std::unordered_set拷贝构造函数兼容
      */
-    NFShmHashSet(const NFShmHashSet& x)
+    NFShmHashSetWithList(const NFShmHashSetWithList& x)
     {
         if (this != &x) m_hashTable = x.m_hashTable;
     }
@@ -491,7 +702,7 @@ public:
      * @param set 源std::unordered_set对象
      * @note STL容器没有此构造函数，为方便互操作而提供
      */
-    explicit NFShmHashSet(const std::unordered_set<Value>& set)
+    explicit NFShmHashSetWithList(const std::unordered_set<Value>& set)
     {
         m_hashTable.insert_unique(set.begin(), set.end());
     }
@@ -501,7 +712,7 @@ public:
      * @param set 源std::set对象
      * @note STL容器没有此构造函数，为方便互操作而提供
      */
-    explicit NFShmHashSet(const std::set<Value>& set)
+    explicit NFShmHashSetWithList(const std::set<Value>& set)
     {
         m_hashTable.insert_unique(set.begin(), set.end());
     }
@@ -511,7 +722,7 @@ public:
      * @param list 初始化列表
      * @note 与std::unordered_set(std::initializer_list)兼容
      */
-    NFShmHashSet(const std::initializer_list<Value>& list)
+    NFShmHashSetWithList(const std::initializer_list<Value>& list)
     {
         insert(list.begin(), list.end());
     }
@@ -545,18 +756,18 @@ public:
      */
     void Init()
     {
-        new(this) NFShmHashSet();
+        new(this) NFShmHashSetWithList();
     }
 
     // ==================== 赋值操作符 ====================
 
     /**
      * @brief 拷贝赋值操作符
-     * @param x 源NFShmHashSet对象
+     * @param x 源NFShmHashSetWithList对象
      * @return 自身引用
      * @note 与std::unordered_set::operator=兼容
      */
-    NFShmHashSet<Value, MAX_SIZE>& operator=(const NFShmHashSet<Value, MAX_SIZE>& x);
+    NFShmHashSetWithList<Value, MAX_SIZE>& operator=(const NFShmHashSetWithList<Value, MAX_SIZE>& x);
 
     /**
      * @brief 从std::unordered_set赋值
@@ -564,7 +775,7 @@ public:
      * @return 自身引用
      * @note STL容器没有此接口，为方便互操作而提供
      */
-    NFShmHashSet<Value, MAX_SIZE>& operator=(const std::unordered_set<Value>& x);
+    NFShmHashSetWithList<Value, MAX_SIZE>& operator=(const std::unordered_set<Value>& x);
 
     /**
      * @brief 从std::set赋值
@@ -572,7 +783,7 @@ public:
      * @return 自身引用
      * @note STL容器没有此接口，为方便互操作而提供
      */
-    NFShmHashSet<Value, MAX_SIZE>& operator=(const std::set<Value>& x);
+    NFShmHashSetWithList<Value, MAX_SIZE>& operator=(const std::set<Value>& x);
 
     /**
      * @brief 从初始化列表赋值
@@ -580,7 +791,7 @@ public:
      * @return 自身引用
      * @note 与std::unordered_set::operator=(std::initializer_list)兼容
      */
-    NFShmHashSet<Value, MAX_SIZE>& operator=(const std::initializer_list<Value>& x);
+    NFShmHashSetWithList<Value, MAX_SIZE>& operator=(const std::initializer_list<Value>& x);
 
 public:
     // ==================== 容量相关接口（STL兼容） ====================
@@ -608,10 +819,10 @@ public:
 
     /**
      * @brief 交换两个容器的内容
-     * @param hs 另一个NFShmHashSet对象
+     * @param hs 另一个NFShmHashSetWithList对象
      * @note 与std::unordered_set::swap()兼容
      */
-    void swap(NFShmHashSet& hs) noexcept { m_hashTable.swap(hs.m_hashTable); }
+    void swap(NFShmHashSetWithList& hs) noexcept { m_hashTable.swap(hs.m_hashTable); }
 
     /**
      * @brief 判断是否已满
@@ -630,8 +841,8 @@ public:
     // ==================== 友元比较操作符 ====================
 
     template <class Val, int X_MAX_SIZE, class Hf, class EqK>
-    friend bool operator==(const NFShmHashSet<Val, X_MAX_SIZE, Hf, EqK>&,
-                           const NFShmHashSet<Val, X_MAX_SIZE, Hf, EqK>&);
+    friend bool operator==(const NFShmHashSetWithList<Val, X_MAX_SIZE, Hf, EqK>&,
+                           const NFShmHashSetWithList<Val, X_MAX_SIZE, Hf, EqK>&);
 
     // ==================== STL兼容迭代器接口 ====================
 
@@ -676,7 +887,65 @@ public:
      * @note 与std::unordered_set::cend()兼容
      */
     const_iterator cend() const { return m_hashTable.end(); }
+public:
+    // ==================== 链表迭代器接口（新增） ====================
 
+    /**
+     * @brief 获取链表起始迭代器（按插入顺序）
+     * @return 指向链表第一个元素的迭代器
+     * @note 按插入顺序遍历，用于实现FIFO或调试
+     */
+    list_iterator list_begin() { return m_hashTable.list_begin(); }
+
+    /**
+     * @brief 获取链表结束迭代器
+     * @return 指向链表末尾的迭代器
+     */
+    list_iterator list_end() { return m_hashTable.list_end(); }
+
+    /**
+     * @brief 获取常量链表起始迭代器
+     * @return 指向链表第一个元素的常量迭代器
+     */
+    const_list_iterator list_begin() const { return m_hashTable.list_begin(); }
+
+    /**
+     * @brief 获取常量链表结束迭代器
+     * @return 指向链表末尾的常量迭代器
+     */
+    const_list_iterator list_end() const { return m_hashTable.list_end(); }
+
+    /**
+     * @brief 获取常量链表起始迭代器（C++11风格）
+     * @return 指向链表第一个元素的常量迭代器
+     */
+    const_list_iterator list_cbegin() const { return m_hashTable.list_cbegin(); }
+
+    /**
+     * @brief 获取常量链表结束迭代器（C++11风格）
+     * @return 指向链表末尾的常量迭代器
+     */
+    const_list_iterator list_cend() const { return m_hashTable.list_cend(); }
+
+    // ==================== LRU功能控制接口（新增） ====================
+
+    /**
+     * @brief 启用LRU功能
+     * @note 启用后，find/count操作会将访问的节点移动到链表尾部
+     */
+    void enable_lru() { m_hashTable.enable_lru(); }
+
+    /**
+     * @brief 禁用LRU功能
+     * @note 禁用后，find/count操作不会移动节点位置
+     */
+    void disable_lru() { m_hashTable.disable_lru(); }
+
+    /**
+     * @brief 检查LRU功能是否启用
+     * @return true表示启用，false表示禁用
+     */
+    bool is_lru_enabled() const { return m_hashTable.is_lru_enabled(); }
 public:
     // ==================== 插入接口（STL兼容） ====================
 
@@ -913,7 +1182,7 @@ public:
  * @note STL容器没有此接口，为方便从有序容器转换而提供
  */
 template <class Value, int MAX_SIZE, class HashFcn, class EqualKey>
-NFShmHashSet<Value, MAX_SIZE>& NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>::operator=(const std::set<Value>& x)
+NFShmHashSetWithList<Value, MAX_SIZE>& NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>::operator=(const std::set<Value>& x)
 {
     clear();
     m_hashTable.insert_unique(x.begin(), x.end());
@@ -927,7 +1196,7 @@ NFShmHashSet<Value, MAX_SIZE>& NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>:
  * @note STL容器没有此接口，为方便从STL无序容器转换而提供
  */
 template <class Value, int MAX_SIZE, class HashFcn, class EqualKey>
-NFShmHashSet<Value, MAX_SIZE>& NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>::operator=(const std::unordered_set<Value>& x)
+NFShmHashSetWithList<Value, MAX_SIZE>& NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>::operator=(const std::unordered_set<Value>& x)
 {
     clear();
     m_hashTable.insert_unique(x.begin(), x.end());
@@ -936,12 +1205,12 @@ NFShmHashSet<Value, MAX_SIZE>& NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>:
 
 /**
  * @brief 拷贝赋值操作符实现
- * @param x 源NFShmHashSet对象
+ * @param x 源NFShmHashSetWithList对象
  * @return 自身引用
  * @note 与std::unordered_set::operator=兼容
  */
 template <class Value, int MAX_SIZE, class HashFcn, class EqualKey>
-NFShmHashSet<Value, MAX_SIZE>& NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>::operator=(const NFShmHashSet<Value, MAX_SIZE>& x)
+NFShmHashSetWithList<Value, MAX_SIZE>& NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>::operator=(const NFShmHashSetWithList<Value, MAX_SIZE>& x)
 {
     if (this != &x)
     {
@@ -958,7 +1227,7 @@ NFShmHashSet<Value, MAX_SIZE>& NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>:
  * @note 与std::unordered_set::operator=(std::initializer_list)兼容
  */
 template <class Value, int MAX_SIZE, class HashFcn, class EqualKey>
-NFShmHashSet<Value, MAX_SIZE>& NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>::operator=(const std::initializer_list<Value>& x)
+NFShmHashSetWithList<Value, MAX_SIZE>& NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>::operator=(const std::initializer_list<Value>& x)
 {
     clear();
     m_hashTable.insert_unique(x.begin(), x.end());
@@ -974,8 +1243,8 @@ NFShmHashSet<Value, MAX_SIZE>& NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>:
  */
 template <class Value, int MAX_SIZE, class HashFcn, class EqualKey>
 template <typename... Args>
-std::pair<typename NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>::iterator, bool>
-NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>::emplace(const Args&... args)
+std::pair<typename NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>::iterator, bool>
+NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>::emplace(const Args&... args)
 {
     value_type obj(args...);
     return m_hashTable.insert_unique(obj);
@@ -991,8 +1260,8 @@ NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>::emplace(const Args&... args)
  */
 template <class Value, int MAX_SIZE, class HashFcn, class EqualKey>
 template <typename... Args>
-typename NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>::iterator
-NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>::emplace_hint(const_iterator hint, const Args&... args)
+typename NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>::iterator
+NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>::emplace_hint(const_iterator hint, const Args&... args)
 {
     (void)hint; // 忽略提示参数
     value_type obj(args...);
@@ -1003,22 +1272,22 @@ NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>::emplace_hint(const_iterator hi
 
 /**
  * @brief 相等比较操作符
- * @param hs1 第一个NFShmHashSet对象
- * @param hs2 第二个NFShmHashSet对象
+ * @param hs1 第一个NFShmHashSetWithList对象
+ * @param hs2 第二个NFShmHashSetWithList对象
  * @return true表示相等
  * @note 与std::unordered_set的operator==兼容
  * @note 比较所有元素是否相等，顺序无关
  */
 template <class Value, int MAX_SIZE, class HashFcn, class EqualKey>
-bool operator==(const NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>& hs1,
-                const NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>& hs2)
+bool operator==(const NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>& hs1,
+                const NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>& hs2)
 {
     return hs1.m_hashTable == hs2.m_hashTable;
 }
 
 template <class Value, int MAX_SIZE, class HashFcn, class EqualKey>
-void swap(const NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>& hs1,
-                const NFShmHashSet<Value, MAX_SIZE, HashFcn, EqualKey>& hs2)
+void swap(const NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>& hs1,
+                const NFShmHashSetWithList<Value, MAX_SIZE, HashFcn, EqualKey>& hs2)
 {
     hs1.m_hashTable.swap(hs2.m_hashTable);
 }

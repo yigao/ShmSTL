@@ -9,8 +9,6 @@
 
 #pragma once
 
-#include "NFComm/NFPluginModule/NFLogMgr.h"
-#include "NFComm/NFShmCore/NFShmMgr.h"
 #include "NFShmStl.h"
 
 template<class Tp, int MAX_SIZE>
@@ -19,12 +17,13 @@ class NFShmStringBase
 protected:
     Tp m_data[MAX_SIZE + 1];
     size_t m_size;
+    int8_t m_init;
 
     size_t max_size() const { return MAX_SIZE; }
 
     NFShmStringBase()
     {
-        if (EN_OBJ_MODE_INIT == NFShmMgr::Instance()->GetCreateMode())
+        if (SHM_CREATE_MODE)
         {
             CreateInit();
         }
@@ -36,13 +35,16 @@ protected:
 
     ~NFShmStringBase()
     {
-
+        m_size = 0;
+        memset(m_data, 0, sizeof(m_data));
+        m_init = 0;
     }
 
     int CreateInit()
     {
         m_size = 0;
         memset(m_data, 0, sizeof(m_data));
+        m_init = EN_NF_SHM_STL_INIT_OK;
         return 0;
     }
 
@@ -69,7 +71,7 @@ protected:
 // a block of memory whose size is at least n + 1.
 
 
-template<int MAX_SIZE, class CharT = char, class Traits = std::char_traits<CharT>>
+template<int MAX_SIZE, class CharT = char, class Traits = std::char_traits<CharT> >
 class NFShmString : private NFShmStringBase<CharT, MAX_SIZE>
 {
 public:
@@ -94,10 +96,10 @@ public:
 
     typedef NFShmStringBase<CharT, MAX_SIZE> _Base;
 
-public:                         // Constructor, destructor, assignment.
+public: // Constructor, destructor, assignment.
     explicit NFShmString()
     {
-        if (EN_OBJ_MODE_INIT == NFShmMgr::Instance()->GetCreateMode())
+        if (SHM_CREATE_MODE)
         {
             CreateInit();
         }
@@ -172,7 +174,6 @@ public:                         // Constructor, destructor, assignment.
 
     ~NFShmString()
     {
-
     }
 
     NFShmString &operator=(const NFShmString &__s)
@@ -210,11 +211,19 @@ public:                         // Constructor, destructor, assignment.
         return 0;
     }
 
+    //init data in union
+    void Init()
+    {
+        new(this) NFShmString();
+    }
+
 protected:
     using _Base::m_data;
     using _Base::m_size;
-private:
+    using _Base::m_init;
+    static CharT m_staticError;
 
+private:
     void _M_construct_null(CharT *__p)
     {
         std::_Construct(__p);
@@ -291,30 +300,73 @@ private:
         _M_terminate_string();
     }
 
+public: // Iterators.
+    iterator begin()
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, m_data, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return m_data;
+    }
 
-public:                         // Iterators.
-    iterator begin() { return m_data; }
+    iterator end()
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, m_data, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return m_data + m_size;
+    }
 
-    iterator end() { return m_data + m_size; }
+    const_iterator begin() const
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, m_data, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return m_data;
+    }
 
-    const_iterator begin() const { return m_data; }
+    const_iterator end() const
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, m_data, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return m_data + m_size;
+    }
 
-    const_iterator end() const { return m_data + m_size; }
+    reverse_iterator rbegin()
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, reverse_iterator(m_data), "not init, TRACE_STACK:%s", TRACE_STACK());
+        return reverse_iterator(m_data + m_size);
+    }
 
-    reverse_iterator rbegin() { return reverse_iterator(m_data + m_size); }
+    reverse_iterator rend()
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, reverse_iterator(m_data), "not init, TRACE_STACK:%s", TRACE_STACK());
+        return reverse_iterator(m_data);
+    }
 
-    reverse_iterator rend() { return reverse_iterator(m_data); }
+    const_reverse_iterator rbegin() const
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, const_reverse_iterator(m_data), "not init, TRACE_STACK:%s", TRACE_STACK());
+        return const_reverse_iterator(m_data + m_size);
+    }
 
-    const_reverse_iterator rbegin() const { return const_reverse_iterator(m_data + m_size); }
+    const_reverse_iterator rend() const
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, const_reverse_iterator(m_data), "not init, TRACE_STACK:%s", TRACE_STACK());
+        return const_reverse_iterator(m_data);
+    }
 
-    const_reverse_iterator rend() const { return const_reverse_iterator(m_data); }
+public: // Size, capacity, etc.
+    size_type size() const
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, 0, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return m_size;
+    }
 
-public:                         // Size, capacity, etc.
-    size_type size() const { return m_size; }
+    size_type length() const
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, 0, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return size();
+    }
 
-    size_type length() const { return size(); }
-
-    size_t max_size() const { return _Base::max_size(); }
+    size_t max_size() const
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, _Base::max_size(), "not init, TRACE_STACK:%s", TRACE_STACK());
+        return _Base::max_size();
+    }
 
     void reserve(size_type = 0);
 
@@ -322,6 +374,7 @@ public:                         // Size, capacity, etc.
 
     void clear()
     {
+        CHECK_EXPR_RE_VOID(m_init == EN_NF_SHM_STL_INIT_OK, "not init, TRACE_STACK:%s", TRACE_STACK());
         if (!empty())
         {
             Traits::assign(*m_data, _M_null());
@@ -330,31 +383,48 @@ public:                         // Size, capacity, etc.
         }
     }
 
-    bool empty() const { return m_size == 0; }
+    bool empty() const
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, true, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return m_size == 0;
+    }
 
-public:                         // Element access.
+public: // Element access.
 
-    const_reference operator[](size_type __n) const { return *(m_data + __n); }
+    const_reference operator[](size_type __n) const
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, m_staticError, "not init, TRACE_STACK:%s", TRACE_STACK());
+        CHECK_EXPR(__n < size(), m_staticError, "index __n:%lu >= size():%lu, TRACE_STACK:%s", __n, size(), TRACE_STACK());
+        return m_data[__n];
+    }
 
-    reference operator[](size_type __n) { return *(m_data + __n); }
+    reference operator[](size_type __n)
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, m_staticError, "not init, TRACE_STACK:%s", TRACE_STACK());
+        CHECK_EXPR(__n < size(), m_staticError, "index __n:%lu >= size():%lu, TRACE_STACK:%s", __n, size(), TRACE_STACK());
+        return m_data[__n];
+    }
 
     const_reference at(size_type __n) const
     {
-        NF_ASSERT(__n < size());
-        return *(m_data + __n);
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, m_staticError, "not init, TRACE_STACK:%s", TRACE_STACK());
+        CHECK_EXPR(__n < size(), m_staticError, "index __n:%lu >= size():%lu, TRACE_STACK:%s", __n, size(), TRACE_STACK());
+        return m_data[__n];
     }
 
     reference at(size_type __n)
     {
-        NF_ASSERT(__n < size());
-        return *(m_data + __n);
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, m_staticError, "not init, TRACE_STACK:%s", TRACE_STACK());
+        CHECK_EXPR(__n < size(), m_staticError, "index __n:%lu >= size():%lu, TRACE_STACK:%s", __n, size(), TRACE_STACK());
+        return m_data[__n];
     }
 
-public:                         // Other modifier member functions.
+public: // Other modifier member functions.
 
     size_type copy(CharT *__s, size_type __n, size_type __pos = 0) const
     {
-        NF_ASSERT(__pos <= size());
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, 0, "not init, TRACE_STACK:%s", TRACE_STACK());
+        CHECK_EXPR(__pos <= size(), 0, "__pos:%lu > size():%lu, TRACE_STACK:%s", __pos, size(), TRACE_STACK());
         const size_type __len = min(__n, size() - __pos);
         Traits::copy(__s, m_data + __pos, __len);
         return __len;
@@ -364,14 +434,23 @@ public:                         // Other modifier member functions.
     {
     }
 
-public:                         // Conversion to C string.
+public: // Conversion to C string.
 
-    const CharT *c_str() const { return m_data; }
+    const CharT *c_str() const
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, m_data, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return m_data;
+    }
 
-    const CharT *data() const { return m_data; }
+    const CharT *data() const
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, m_data, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return m_data;
+    }
 
     std::basic_string<CharT, Traits> GetString() const
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, (std::basic_string<CharT, Traits>()), "not init, TRACE_STACK:%s", TRACE_STACK());
         return std::basic_string<CharT, Traits>(begin(), end());
     }
 
@@ -380,28 +459,50 @@ public:                         // Conversion to C string.
         return GetString();
     }
 
-public:                         // Append, operator+=, push_back.
+public: // Append, operator+=, push_back.
 
-    NFShmString &operator+=(const NFShmString &__s) { return append(__s); }
+    NFShmString &operator+=(const NFShmString &__s)
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return append(__s);
+    }
 
     template<int MAX_SIZE2>
-    NFShmString &operator+=(const NFShmString<MAX_SIZE2> &__s) { return append(__s.begin(), __s.end()); }
+    NFShmString &operator+=(const NFShmString<MAX_SIZE2> &__s)
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return append(__s.begin(), __s.end());
+    }
 
-    NFShmString &operator+=(const std::basic_string<CharT, Traits> &__s) { return append(__s.begin(), __s.end()); }
+    NFShmString &operator+=(const std::basic_string<CharT, Traits> &__s)
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return append(__s.begin(), __s.end());
+    }
 
-    NFShmString &operator+=(const CharT *__s) { return append(__s); }
+    NFShmString &operator+=(const CharT *__s)
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return append(__s);
+    }
 
     NFShmString &operator+=(CharT __c)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
         push_back(__c);
         return *this;
     }
 
-    NFShmString &append(const NFShmString &__s) { return append(__s.begin(), __s.end()); }
+    NFShmString &append(const NFShmString &__s)
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return append(__s.begin(), __s.end());
+    }
 
     NFShmString &append(const NFShmString &__s,
                         size_type __pos, size_type __n)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
         if (__pos <= __s.size())
         {
             return append(__s.begin() + __pos,
@@ -411,9 +512,17 @@ public:                         // Append, operator+=, push_back.
         return *this;
     }
 
-    NFShmString &append(const CharT *__s, size_type __n) { return append(__s, __s + __n); }
+    NFShmString &append(const CharT *__s, size_type __n)
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return append(__s, __s + __n);
+    }
 
-    NFShmString &append(const CharT *__s) { return append(__s, __s + Traits::length(__s)); }
+    NFShmString &append(const CharT *__s)
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return append(__s, __s + Traits::length(__s));
+    }
 
     NFShmString &append(size_type __n, CharT __c);
 
@@ -422,6 +531,7 @@ public:                         // Append, operator+=, push_back.
     template<class _InputIter>
     NFShmString &append(_InputIter __first, _InputIter __last)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
         typedef typename std::__is_integer<_InputIter>::__type _Integral;
         return _M_append_dispatch(__first, __last, _Integral());
     }
@@ -430,6 +540,7 @@ public:                         // Append, operator+=, push_back.
 
     void push_back(CharT __c)
     {
+        CHECK_EXPR_RE_VOID(m_init == EN_NF_SHM_STL_INIT_OK, "not init, TRACE_STACK:%s", TRACE_STACK());
         if (m_size >= MAX_SIZE)
             return;
         _M_construct_null(m_data + m_size + 1);
@@ -439,6 +550,7 @@ public:                         // Append, operator+=, push_back.
 
     void pop_back()
     {
+        CHECK_EXPR_RE_VOID(m_init == EN_NF_SHM_STL_INIT_OK, "not init, TRACE_STACK:%s", TRACE_STACK());
         Traits::assign(*(m_data + m_size - 1), _M_null());
         --m_size;
     }
@@ -451,6 +563,7 @@ public:
     NFShmString &append(_ForwardIter __f, _ForwardIter __l,
                         forward_iterator_tag);
 
+private:
     template<class _Integer>
     NFShmString &_M_append_dispatch(_Integer __n, _Integer __x, __true_type)
     {
@@ -465,22 +578,35 @@ public:
         return append(__f, __l, _Category());
     }
 
-public:                         // Assign
+public: // Assign
 
-    NFShmString &assign(const NFShmString &__s) { return assign(__s.begin(), __s.end()); }
+    NFShmString &assign(const NFShmString &__s)
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return assign(__s.begin(), __s.end());
+    }
 
     NFShmString &assign(const NFShmString &__s,
                         size_type __pos, size_type __n)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
         if (__pos > __s.size())
             return *this;
         return assign(__s.begin() + __pos,
                       __s.begin() + __pos + min(__n, __s.size() - __pos));
     }
 
-    NFShmString &assign(const CharT *__s, size_type __n) { return assign(__s, __s + __n); }
+    NFShmString &assign(const CharT *__s, size_type __n)
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return assign(__s, __s + __n);
+    }
 
-    NFShmString &assign(const CharT *__s) { return assign(__s, __s + Traits::length(__s)); }
+    NFShmString &assign(const CharT *__s)
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return assign(__s, __s + Traits::length(__s));
+    }
 
     NFShmString &assign(size_type __n, CharT __c);
 
@@ -489,13 +615,14 @@ public:                         // Assign
     template<class _InputIter>
     NFShmString &assign(_InputIter __first, _InputIter __last)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
         typedef typename std::__is_integer<_InputIter>::__type _Integral;
         return _M_assign_dispatch(__first, __last, _Integral());
     }
 
     NFShmString &assign(const CharT *__f, const CharT *__l);
 
-private:                        // Helper functions for assign.
+private: // Helper functions for assign.
 
     template<class _Integer>
     NFShmString &_M_assign_dispatch(_Integer __n, _Integer __x, __true_type)
@@ -507,10 +634,11 @@ private:                        // Helper functions for assign.
     NFShmString &_M_assign_dispatch(_InputIter __f, _InputIter __l,
                                     __false_type);
 
-public:                         // Insert
+public: // Insert
 
     NFShmString &insert(size_type __pos, const NFShmString &__s)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
         if (__pos > size())
             return *this;
         if (size() > max_size() - __s.size())
@@ -522,6 +650,7 @@ public:                         // Insert
     NFShmString &insert(size_type __pos, const NFShmString &__s,
                         size_type __beg, size_type __n)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
         if (__pos > size() || __beg > __s.size())
             return *this;
         size_type __len = (std::min)(__n, __s.size() - __beg);
@@ -534,6 +663,7 @@ public:                         // Insert
 
     NFShmString &insert(size_type __pos, const CharT *__s, size_type __n)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
         if (__pos > size())
             return *this;
         if (size() > max_size() - __n)
@@ -544,6 +674,7 @@ public:                         // Insert
 
     NFShmString &insert(size_type __pos, const CharT *__s)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
         if (__pos > size())
             return *this;
         size_type __len = Traits::length(__s);
@@ -555,6 +686,7 @@ public:                         // Insert
 
     NFShmString &insert(size_type __pos, size_type __n, CharT __c)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
         if (__pos > size())
             return *this;
         if (size() > max_size() - __n)
@@ -565,6 +697,7 @@ public:                         // Insert
 
     iterator insert(iterator __p, CharT __c)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, end(), "not init, TRACE_STACK:%s", TRACE_STACK());
         if (__p == m_data + m_size)
         {
             push_back(__c);
@@ -581,14 +714,14 @@ public:                         // Insert
     template<class _InputIter>
     void insert(iterator __p, _InputIter __first, _InputIter __last)
     {
+        CHECK_EXPR_RE_VOID(m_init == EN_NF_SHM_STL_INIT_OK, "not init, TRACE_STACK:%s", TRACE_STACK());
         typedef typename std::__is_integer<_InputIter>::__type _Integral;
         _M_insert_dispatch(__p, __first, __last, _Integral());
     }
 
     void insert(iterator __p, const CharT *__first, const CharT *__last);
 
-
-private:                        // Helper functions for insert.
+private: // Helper functions for insert.
 
     template<class _InputIter>
     void insert(iterator __p, _InputIter, _InputIter, input_iterator_tag);
@@ -626,13 +759,15 @@ private:                        // Helper functions for insert.
     void
     _M_copy(const CharT *__first, const CharT *__last, CharT *__result)
     {
+        CHECK_EXPR_RE_VOID(m_init == EN_NF_SHM_STL_INIT_OK, "not init, TRACE_STACK:%s", TRACE_STACK());
         Traits::copy(__result, __first, __last - __first);
     }
 
-public:                         // Erase.
+public: // Erase.
 
     NFShmString &erase(size_type __pos = 0, size_type __n = npos)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
         if (__pos > size())
             return *this;
         erase(m_data + __pos, m_data + __pos + (std::min)(__n, size() - __pos));
@@ -641,6 +776,7 @@ public:                         // Erase.
 
     iterator erase(iterator __position)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, end(), "not init, TRACE_STACK:%s", TRACE_STACK());
         // The move includes the terminating null.
         Traits::move(__position, __position + 1, m_data + m_size - __position);
         --m_size;
@@ -649,6 +785,7 @@ public:                         // Erase.
 
     iterator erase(iterator __first, iterator __last)
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, end(), "not init, TRACE_STACK:%s", TRACE_STACK());
         if (__first != __last)
         {
             // The move includes the terminating null.
@@ -658,14 +795,19 @@ public:                         // Erase.
         return __first;
     }
 
-public:                         // Compare
+public: // Compare
 
-    int compare(const NFShmString &__s) const { return _M_compare(m_data, m_data + m_size, __s.m_data, __s.m_data + m_size); }
+    int compare(const NFShmString &__s) const
+    {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, 0, "not init, TRACE_STACK:%s", TRACE_STACK());
+        return _M_compare(m_data, m_data + m_size, __s.m_data, __s.m_data + m_size);
+    }
 
     int compare(size_type __pos1, size_type __n1,
                 const NFShmString &__s) const
     {
-        NF_ASSERT(__pos1 <= size());
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, 0, "not init, TRACE_STACK:%s", TRACE_STACK());
+        CHECK_EXPR(__pos1 <= size(), -1, "position __pos1:%lu > size():%lu, TRACE_STACK:%s", __pos1, size(), TRACE_STACK());
         return _M_compare(m_data + __pos1,
                           m_data + __pos1 + min(__n1, size() - __pos1),
                           __s.m_data, __s.m_data + m_size);
@@ -675,7 +817,8 @@ public:                         // Compare
                 const NFShmString &__s,
                 size_type __pos2, size_type __n2) const
     {
-        NF_ASSERT(!(__pos1 > size() || __pos2 > __s.size()));
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, 0, "not init, TRACE_STACK:%s", TRACE_STACK());
+        CHECK_EXPR(!(__pos1 > size() || __pos2 > __s.size()), -1, "pos1, size(), TRACE_STACK:%s", __pos1, size(), TRACE_STACK());
         return _M_compare(m_data + __pos1,
                           m_data + __pos1 + min(__n1, size() - __pos1),
                           __s.m_data + __pos2,
@@ -684,12 +827,14 @@ public:                         // Compare
 
     int compare(const CharT *__s) const
     {
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, 0, "not init, TRACE_STACK:%s", TRACE_STACK());
         return _M_compare(m_data, m_data + m_size, __s, __s + Traits::length(__s));
     }
 
     int compare(size_type __pos1, size_type __n1, const CharT *__s) const
     {
-        NF_ASSERT(__pos1 <= size());
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, 0, "not init, TRACE_STACK:%s", TRACE_STACK());
+        CHECK_EXPR(__pos1 <= size(), -1, "pos1, size(), TRACE_STACK:%s", __pos1, size(), TRACE_STACK());
         return _M_compare(m_data + __pos1,
                           m_data + __pos1 + min(__n1, size() - __pos1),
                           __s, __s + Traits::length(__s));
@@ -698,13 +843,14 @@ public:                         // Compare
     int compare(size_type __pos1, size_type __n1, const CharT *__s,
                 size_type __n2) const
     {
-        NF_ASSERT (__pos1 <= size());
+        CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, 0, "not init, TRACE_STACK:%s", TRACE_STACK());
+        CHECK_EXPR(__pos1 <= size(), -1, "pos1, size(), TRACE_STACK:%s", __pos1, size(), TRACE_STACK());
         return _M_compare(m_data + __pos1,
                           m_data + __pos1 + min(__n1, size() - __pos1),
                           __s, __s + __n2);
     }
 
-public:                        // Helper function for compare.
+public: // Helper function for compare.
     static int _M_compare(const CharT *__f1, const CharT *__l1,
                           const CharT *__f2, const CharT *__l2)
     {
@@ -715,14 +861,15 @@ public:                        // Helper function for compare.
     }
 };
 
-
+template<int MAX_SIZE, class CharT, class Traits>
+CharT NFShmString<MAX_SIZE, CharT, Traits>::m_staticError = CharT();
 
 // ------------------------------------------------------------
 // Non-inline declarations.
 
 template<int MAX_SIZE, class CharT, class _Traits>
 const typename NFShmString<MAX_SIZE, CharT, _Traits>::size_type
-        NFShmString<MAX_SIZE, CharT, _Traits>::npos
+NFShmString<MAX_SIZE, CharT, _Traits>::npos
         = (typename NFShmString<MAX_SIZE, CharT, _Traits>::size_type) -1;
 
 // Change the string's capacity so that it is large enough to hold
@@ -732,13 +879,13 @@ const typename NFShmString<MAX_SIZE, CharT, _Traits>::size_type
 template<int MAX_SIZE, class CharT, class _Traits>
 void NFShmString<MAX_SIZE, CharT, _Traits>::reserve(size_type __res_arg)
 {
-
 }
 
 template<int MAX_SIZE, class CharT, class _Traits>
 NFShmString<MAX_SIZE, CharT, _Traits> &
 NFShmString<MAX_SIZE, CharT, _Traits>::append(size_type __n, CharT __c)
 {
+    CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
     if (__n > max_size() || size() + __n > max_size())
     {
         __n = max_size() - size();
@@ -761,6 +908,7 @@ NFShmString<MAX_SIZE, CharT, _Traits>::append(_InputIterator __first,
                                               _InputIterator __last,
                                               input_iterator_tag)
 {
+    CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
     for (; __first != __last; ++__first)
         push_back(*__first);
     return *this;
@@ -773,6 +921,7 @@ NFShmString<MAX_SIZE, CharT, _Traits>::append(_ForwardIter __first,
                                               _ForwardIter __last,
                                               forward_iterator_tag)
 {
+    CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
     if (__first != __last)
     {
         const size_type __old_size = size();
@@ -809,11 +958,12 @@ NFShmString<MAX_SIZE, CharT, _Traits> &
 NFShmString<MAX_SIZE, CharT, _Traits>::append(const CharT *__first,
                                               const CharT *__last)
 {
+    CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
     if (__first != __last)
     {
         const size_type __old_size = size();
         ptrdiff_t __n = __last - __first;
-        if (__n > max_size() || __old_size + __n > max_size())
+        if ((size_t) __n > max_size() || __old_size + __n > max_size())
         {
             __n = max_size() - size();
             if (__n > 0)
@@ -844,6 +994,7 @@ template<int MAX_SIZE, class CharT, class _Traits>
 NFShmString<MAX_SIZE, CharT, _Traits> &
 NFShmString<MAX_SIZE, CharT, _Traits>::assign(size_type __n, CharT __c)
 {
+    CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
     if (__n <= size())
     {
         _Traits::assign(m_data, __n, __c);
@@ -881,6 +1032,7 @@ NFShmString<MAX_SIZE, CharT, _Traits> &
 NFShmString<MAX_SIZE, CharT, _Traits>::assign(const CharT *__f,
                                               const CharT *__l)
 {
+    CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, *this, "not init, TRACE_STACK:%s", TRACE_STACK());
     const ptrdiff_t __n = __l - __f;
     if (static_cast<size_type>(__n) <= size())
     {
@@ -922,6 +1074,7 @@ void NFShmString<MAX_SIZE, CharT, _Traits>
 ::insert(NFShmString<MAX_SIZE, CharT, _Traits>::iterator __position,
          size_t __n, CharT __c)
 {
+    CHECK_EXPR_RE_VOID(m_init == EN_NF_SHM_STL_INIT_OK, "not init, TRACE_STACK:%s", TRACE_STACK());
     if (__n != 0)
     {
         if (size_type(MAX_SIZE - m_size) >= __n)
@@ -956,6 +1109,7 @@ void NFShmString<MAX_SIZE, CharT, _Traits>::insert(iterator __p,
                                                    _InputIter __last,
                                                    input_iterator_tag)
 {
+    CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, , "not init, TRACE_STACK:%s", TRACE_STACK());
     for (; __first != __last; ++__first)
     {
         __p = insert(__p, *__first);
@@ -971,6 +1125,7 @@ NFShmString<MAX_SIZE, CharT, _Traits>::insert(iterator __position,
                                               _ForwardIter __last,
                                               forward_iterator_tag)
 {
+    CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, , "not init, TRACE_STACK:%s", TRACE_STACK());
     if (__first != __last)
     {
         difference_type __n = 0;
@@ -1009,6 +1164,7 @@ NFShmString<MAX_SIZE, CharT, _Traits>::insert(iterator __position,
                                               const CharT *__first,
                                               const CharT *__last)
 {
+    CHECK_EXPR(m_init == EN_NF_SHM_STL_INIT_OK, , "not init, TRACE_STACK:%s", TRACE_STACK());
     if (__first != __last)
     {
         const ptrdiff_t __n = __last - __first;
@@ -1043,24 +1199,27 @@ NFShmString<MAX_SIZE, CharT, _Traits>::insert(iterator __position,
 
 template<int MAX_SIZE, class CharT, class _Traits>
 inline bool
-operator==(const NFShmString<MAX_SIZE, CharT, _Traits>& __x,
-           const NFShmString<MAX_SIZE, CharT, _Traits>& __y) {
+operator==(const NFShmString<MAX_SIZE, CharT, _Traits> &__x,
+           const NFShmString<MAX_SIZE, CharT, _Traits> &__y)
+{
     return __x.size() == __y.size() &&
            _Traits::compare(__x.data(), __y.data(), __x.size()) == 0;
 }
 
 template<int MAX_SIZE, class CharT, class _Traits>
 inline bool
-operator==(const CharT* __s,
-           const NFShmString<MAX_SIZE, CharT, _Traits>& __y) {
+operator==(const CharT *__s,
+           const NFShmString<MAX_SIZE, CharT, _Traits> &__y)
+{
     size_t __n = _Traits::length(__s);
     return __n == __y.size() && _Traits::compare(__s, __y.data(), __n) == 0;
 }
 
 template<int MAX_SIZE, class CharT, class _Traits>
 inline bool
-operator==(const NFShmString<MAX_SIZE, CharT, _Traits>& __x,
-           const CharT* __s) {
+operator==(const NFShmString<MAX_SIZE, CharT, _Traits> &__x,
+           const CharT *__s)
+{
     size_t __n = _Traits::length(__s);
     return __x.size() == __n && _Traits::compare(__x.data(), __s, __n) == 0;
 }
@@ -1069,16 +1228,18 @@ operator==(const NFShmString<MAX_SIZE, CharT, _Traits>& __x,
 
 template<int MAX_SIZE, class CharT, class _Traits>
 inline bool
-operator<(const NFShmString<MAX_SIZE, CharT, _Traits>& __x,
-          const NFShmString<MAX_SIZE, CharT, _Traits>& __y) {
+operator<(const NFShmString<MAX_SIZE, CharT, _Traits> &__x,
+          const NFShmString<MAX_SIZE, CharT, _Traits> &__y)
+{
     return NFShmString<MAX_SIZE, CharT, _Traits>
            ::_M_compare(__x.begin(), __x.end(), __y.begin(), __y.end()) < 0;
 }
 
 template<int MAX_SIZE, class CharT, class _Traits>
 inline bool
-operator<(const CharT* __s,
-          const NFShmString<MAX_SIZE, CharT, _Traits>& __y) {
+operator<(const CharT *__s,
+          const NFShmString<MAX_SIZE, CharT, _Traits> &__y)
+{
     size_t __n = _Traits::length(__s);
     return NFShmString<MAX_SIZE, CharT, _Traits>
            ::_M_compare(__s, __s + __n, __y.begin(), __y.end()) < 0;
@@ -1086,8 +1247,9 @@ operator<(const CharT* __s,
 
 template<int MAX_SIZE, class CharT, class _Traits>
 inline bool
-operator<(const NFShmString<MAX_SIZE, CharT, _Traits>& __x,
-          const CharT* __s) {
+operator<(const NFShmString<MAX_SIZE, CharT, _Traits> &__x,
+          const CharT *__s)
+{
     size_t __n = _Traits::length(__s);
     return NFShmString<MAX_SIZE, CharT, _Traits>
            ::_M_compare(__x.begin(), __x.end(), __s, __s + __n) < 0;
@@ -1099,9 +1261,9 @@ operator<(const NFShmString<MAX_SIZE, CharT, _Traits>& __x,
 namespace std
 {
     template<int SIZE>
-    struct hash<NFShmString<SIZE>>
+    struct hash<NFShmString<SIZE> >
     {
-        size_t operator()(const NFShmString <SIZE> &eventKey) const
+        size_t operator()(const NFShmString<SIZE> &eventKey) const
         {
             return std::hash<std::string>()(eventKey.ToString());
         }

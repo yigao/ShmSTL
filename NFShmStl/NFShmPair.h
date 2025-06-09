@@ -9,8 +9,7 @@
 
 #pragma once
 
-#include "NFComm/NFPluginModule/NFLogMgr.h"
-#include "NFComm/NFShmCore/NFShmMgr.h"
+#include "NFShmStl.h"
 
 template <class T1, class T2>
 struct NFShmPair {
@@ -22,7 +21,7 @@ struct NFShmPair {
 
     NFShmPair()
     {
-        if (EN_OBJ_MODE_INIT == NFShmMgr::Instance()->GetCreateMode())
+        if (SHM_CREATE_MODE)
         {
             CreateInit();
         }
